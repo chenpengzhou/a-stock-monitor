@@ -1,0 +1,13 @@
+# 大宗商品监控定时任务配置
+# 使用: crontab /path/to/commodity-monitor/cron/commodity-monitor
+
+# 环境配置
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/admin/.npm-global/bin:/home/admin/.openclaw/workspace/crypto-monitor/venv/bin
+PYTHONPATH=/home/admin/.openclaw/workspace/commodity-monitor
+
+# 每天早上9点发送大宗商品分析报告
+0 9 * * * cd /home/admin/.openclaw/workspace/commodity-monitor && /home/admin/.openclaw/workspace/crypto-monitor/venv/bin/python scripts/commodity_monitor.py >> logs/cron.log 2>&1
+
+# 每天晚上8点发送大宗商品分析报告
+0 20 * * * cd /home/admin/.openclaw/workspace/commodity-monitor && /home/admin/.openclaw/workspace/crypto-monitor/venv/bin/python scripts/commodity_monitor.py >> logs/cron.log 2>&1
