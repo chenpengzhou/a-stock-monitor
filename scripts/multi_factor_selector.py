@@ -1,28 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-多因子选股系统 - 完整版
-因子：涨跌幅 + ROE + PE + PB
+多因子选股系统
+时区: Asia/Shanghai (UTC+8)
 """
 
 import pandas as pd
 import numpy as np
-import pymysql
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 # 配置
 STOCK_COUNT = 10
+
+# 账号权限范围内：2024-10-29 到 2025-11-05
 START_DATE = "2025-11-04"
 
-# 聚宽数据库连接
-JQ_CONFIG = {
-    'host': 'stock.jqdata.net',
-    'port': 3306,
-    'user': 'jqdata',
-    'password': 'jqdata',
-    'database': 'jqdata'
-}
+# 获取今天的日期（UTC+8）
+def get_today():
+    return datetime.now().strftime("%Y-%m-%d")
 
 
 def get_all_stocks():
@@ -38,13 +34,20 @@ def get_price_and_change(stocks):
     """获取价格和涨跌幅"""
     from jqdatasdk import get_price
     
-    df = get_price(stocks, start_date=START_DATE, end_date="2025-11-05",
+    # 权限范围内：2024-10-29 到 2025-11-05
+    end_date = "2025-11-05"
+    
+    df = get_price(stocks, start_date=START_DATE, end_date=end_date,
                    frequency='daily', fields=['close'])
+    
+    if df.empty or len(df) < 2:
+        print(f"⚠️ {START_DATE} 数据不足")
+        return pd.DataFrame()
     
     df_wide = df.pivot(index='code', columns='time', values='close')
     
-    if df_wide.empty or len(df_wide.columns) < 2:
-        print("⚠️ 数据不足2天")
+    if len(df_wide.columns) < 2:
+        print("⚠️ 交易日不足2个")
         return pd.DataFrame()
     
     first_date = df_wide.columns[0]
@@ -56,16 +59,28 @@ def get_price_and_change(stocks):
     })
     
     df_result = df_result.dropna()
+    
     print(f"✅ 获取行情成功 ({len(df_result)} 只)")
+    print(f"📅 数据日期: {first_date} ~ {last_date} (UTC+8)")
+    
     return df_result
 
 
 def get_financial_data(stock_codes):
-    """通过PyMySQL获取财务数据"""
+    """获取财务数据"""
     try:
+        import pymysql
+        
+        JQ_CONFIG = {
+            'host': 'stock.jqdata.net',
+            'port': 3306,
+            'user': 'jqdata',
+            'password': 'jqdata',
+            'database': 'jqdata'
+        }
+        
         conn = pymysql.connect(**JQ_CONFIG)
         
-        # 转换代码格式
         stock_list = []
         for code in stock_codes:
             if code.endswith('.XSHG'):
@@ -75,17 +90,7 @@ def get_financial_data(stock_codes):
         
         stocks_str = ','.join(stock_list[:100])
         
-        # SQL查询
-        sql = f"""
-        SELECT 
-            code, 
-            ROE, 
-            pe_ttm as pe, 
-            pb 
-        FROM common_basic 
-        WHERE code IN ({stocks_str})
-        AND date = '2025-09-30'
-        """
+        sql = f"SELECT code, ROE, pe_ttm as pe, pb FROM common_basic WHERE code IN ({stocks_str}) AND date = '2025-09-30'"
         
         df = pd.read_sql(sql, conn)
         df = df.set_index('code')
@@ -103,22 +108,18 @@ def calculate_score(row):
     """计算综合得分"""
     score = 50
     
-    # 涨跌幅因子（30%）
     change = row.get('change', 0)
     if pd.notna(change):
         score += min(max(change, -20), 20) * 0.5
     
-    # ROE因子（40%）
     roe = row.get('ROE', 0)
     if pd.notna(roe) and roe > 0:
         score += min(roe, 30) * 0.5
     
-    # PE因子（20%）
     pe = row.get('pe', 0)
     if pd.notna(pe) and pe > 0 and pe < 100:
         score += (100 - pe) * 0.1
     
-    # PB因子（10%）
     pb = row.get('pb', 0)
     if pd.notna(pb) and pb > 0 and pb < 20:
         score += (20 - pb) * 0.2
@@ -133,7 +134,6 @@ def select_stocks(price_df, stock_codes):
     price_df = price_df[price_df['price'] > 0]
     print(f"📊 有效行情 {len(price_df)} 只")
     
-    # 获取财务数据
     print("📊 获取财务数据...")
     fin_df = get_financial_data(stock_codes)
     
@@ -141,7 +141,6 @@ def select_stocks(price_df, stock_codes):
     
     for code in list(price_df.index):
         try:
-            # 转换代码
             if code.endswith('.XSHG'):
                 sql_code = code.replace('.XSHG', '')
             elif code.endswith('.XSHE'):
@@ -158,7 +157,6 @@ def select_stocks(price_df, stock_codes):
                 'pb': 0,
             }
             
-            # 添加财务数据
             if not fin_df.empty and sql_code in fin_df.index:
                 row_data['ROE'] = float(fin_df.loc[sql_code, 'ROE']) if pd.notna(fin_df.loc[sql_code, 'ROE']) else 0
                 row_data['pe'] = float(fin_df.loc[sql_code, 'pe']) if pd.notna(fin_df.loc[sql_code, 'pe']) else 0
@@ -166,7 +164,7 @@ def select_stocks(price_df, stock_codes):
             
             row_data['score'] = calculate_score(row_data)
             results.append(row_data)
-        except Exception as e:
+        except:
             continue
     
     print(f"📊 处理 {len(results)} 只股票")
@@ -180,8 +178,10 @@ def select_stocks(price_df, stock_codes):
 
 def print_report(selected):
     """打印报告"""
+    today = get_today()
+    
     print(f"\n{'='*60}")
-    print(f"📊 多因子选股报告 - {START_DATE}")
+    print(f"📊 多因子选股报告 - {today} (UTC+8)")
     print(f"{'='*60}")
     
     print(f"\n【因子权重】涨跌幅 30% + ROE 40% + PE 20% + PB 10%")
@@ -210,8 +210,9 @@ def run():
     from jqdatasdk import auth
     
     print("=" * 60)
-    print("🚀 多因子选股系统 - 完整版")
+    print("🚀 多因子选股系统")
     print("=" * 60)
+    print(f"📅 当前日期: {get_today()} (UTC+8)")
     
     print("\n📥 登录聚宽...")
     auth("13675856229", "B9*2Une$A1UqAQ0v")
